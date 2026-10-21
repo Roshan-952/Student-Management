@@ -133,7 +133,75 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ==========================================
-    // API Requests
+    // Cloud Demo Mode & Offline Storage Fallback
+    // ==========================================
+
+    const INITIAL_DEMO_STUDENTS = [
+        { id: 101, name: 'Aarav Sharma', email: 'aarav.sharma@example.edu', course: 'Computer Science', marks: 94.5, grade: 'A+' },
+        { id: 102, name: 'Ananya Iyer', email: 'ananya.iyer@example.edu', course: 'Information Technology', marks: 88.0, grade: 'A' },
+        { id: 103, name: 'Rohan Verma', email: 'rohan.v@example.edu', course: 'Data Science', marks: 76.5, grade: 'B' },
+        { id: 104, name: 'Priya Patel', email: 'priya.patel@example.edu', course: 'Software Engineering', marks: 91.0, grade: 'A+' },
+        { id: 105, name: 'Vikram Malhotra', email: 'vikram.m@example.edu', course: 'Artificial Intelligence', marks: 68.0, grade: 'C' }
+    ];
+
+    function calculateGrade(marks) {
+        if (marks >= 90) return 'A+';
+        if (marks >= 80) return 'A';
+        if (marks >= 70) return 'B';
+        if (marks >= 60) return 'C';
+        if (marks >= 50) return 'D';
+        return 'F';
+    }
+
+    function getLocalStudents() {
+        const stored = localStorage.getItem('edutrack_students_demo');
+        if (stored) {
+            try { return JSON.parse(stored); } catch (e) {}
+        }
+        localStorage.setItem('edutrack_students_demo', JSON.stringify(INITIAL_DEMO_STUDENTS));
+        return [...INITIAL_DEMO_STUDENTS];
+    }
+
+    function saveLocalStudents(list) {
+        localStorage.setItem('edutrack_students_demo', JSON.stringify(list));
+    }
+
+    function calculateLocalStats(students) {
+        const total = students.length;
+        if (total === 0) {
+            return {
+                total: 0,
+                averageMarks: 0,
+                averageGrade: 'N/A',
+                topStudent: 'None',
+                highestMarks: 0,
+                gradeDistribution: { 'A+': 0, 'A': 0, 'B': 0, 'C': 0, 'D': 0, 'F': 0 }
+            };
+        }
+
+        const sumMarks = students.reduce((acc, s) => acc + s.marks, 0);
+        const avg = sumMarks / total;
+        let top = students[0];
+        const dist = { 'A+': 0, 'A': 0, 'B': 0, 'C': 0, 'D': 0, 'F': 0 };
+
+        students.forEach(s => {
+            if (s.marks > top.marks) top = s;
+            const g = s.grade || calculateGrade(s.marks);
+            dist[g] = (dist[g] || 0) + 1;
+        });
+
+        return {
+            total,
+            averageMarks: avg,
+            averageGrade: calculateGrade(avg),
+            topStudent: top.name,
+            highestMarks: top.marks,
+            gradeDistribution: dist
+        };
+    }
+
+    // ==========================================
+    // API Requests (with transparent Cloud Demo fallback)
     // ==========================================
 
     async function fetchDbStatus() {
@@ -141,37 +209,78 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/db-status');
             if (!res.ok) throw new Error('Status network error');
             const data = await res.json();
+            state.isDemoMode = false;
             state.dbStatus = data;
             renderDbStatus(data);
         } catch (err) {
-            elements.dbStatusDot.className = 'status-pulse pulse-warn';
-            elements.dbStatusText.textContent = 'Offline / Connecting';
+            state.isDemoMode = true;
+            elements.dbStatusDot.className = 'status-pulse';
+            elements.dbStatusDot.style.background = '#38bdf8';
+            elements.dbStatusText.textContent = 'Cloud Demo (Local Storage)';
+            elements.footerDbName.textContent = 'Local Browser Storage (Cloud Demo)';
         }
     }
 
     async function fetchStudents() {
+        if (state.isDemoMode) {
+            state.students = getLocalStudents();
+            applyFilterAndSort();
+            return;
+        }
         try {
             const res = await fetch('/api/students');
             if (!res.ok) throw new Error('Could not fetch students');
             state.students = await res.json();
             applyFilterAndSort();
         } catch (err) {
-            showToast('Failed to load student records: ' + err.message, 'error');
+            state.isDemoMode = true;
+            state.students = getLocalStudents();
+            applyFilterAndSort();
+            elements.dbStatusDot.className = 'status-pulse';
+            elements.dbStatusDot.style.background = '#38bdf8';
+            elements.dbStatusText.textContent = 'Cloud Demo (Local Storage)';
+            elements.footerDbName.textContent = 'Local Browser Storage (Cloud Demo)';
         }
     }
 
     async function fetchStats() {
+        if (state.isDemoMode) {
+            state.stats = calculateLocalStats(state.students);
+            renderStats(state.stats);
+            return;
+        }
         try {
             const res = await fetch('/api/stats');
-            if (!res.ok) return;
+            if (!res.ok) throw new Error('Stats error');
             state.stats = await res.json();
             renderStats(state.stats);
         } catch (err) {
-            console.error('Stats error:', err);
+            state.stats = calculateLocalStats(state.students);
+            renderStats(state.stats);
         }
     }
 
     async function saveStudent(studentData) {
+        studentData.grade = calculateGrade(studentData.marks);
+
+        if (state.isDemoMode) {
+            const isEdit = Boolean(state.editingStudentId);
+            let list = getLocalStudents();
+            if (isEdit) {
+                const idx = list.findIndex(s => s.id === state.editingStudentId);
+                if (idx !== -1) {
+                    list[idx] = { ...list[idx], ...studentData, id: state.editingStudentId };
+                }
+            } else {
+                const nextId = list.length > 0 ? Math.max(...list.map(s => s.id)) + 1 : 101;
+                studentData.id = nextId;
+                list.push(studentData);
+            }
+            saveLocalStudents(list);
+            state.students = list;
+            return studentData;
+        }
+
         const isEdit = Boolean(state.editingStudentId);
         const url = isEdit ? `/api/students/${state.editingStudentId}` : '/api/students';
         const method = isEdit ? 'PUT' : 'POST';
@@ -190,6 +299,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function deleteStudent(id) {
+        if (state.isDemoMode) {
+            let list = getLocalStudents();
+            list = list.filter(s => s.id !== id);
+            saveLocalStudents(list);
+            state.students = list;
+            return { message: 'Deleted from local storage' };
+        }
+
         const res = await fetch(`/api/students/${id}`, { method: 'DELETE' });
         const data = await res.json();
         if (!res.ok) {
@@ -199,6 +316,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function configureDatabase(config) {
+        if (state.isDemoMode) {
+            showToast('Cloud demo runs client-side. Launch run.bat locally for full Java/MySQL mode.', 'info');
+            return { mode: 'DEMO' };
+        }
         const res = await fetch('/api/db-config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
