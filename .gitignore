@@ -1,0 +1,18 @@
+# Compiled class files
+bin/
+*.class
+
+# Package Files
+*.war
+*.ear
+
+# Runtime Database files
+*.mv.db
+*.trace.db
+
+# IDE and OS files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
